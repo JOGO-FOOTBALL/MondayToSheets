@@ -1,0 +1,10 @@
+# Secrets (local only)
+.env
+.streamlit/secrets.toml
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
