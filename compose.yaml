@@ -1,0 +1,11 @@
+# Local test run in Docker, with the same secrets as a local Python run.
+services:
+  monday-to-sheets:
+    image: monday-to-sheets
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./.streamlit:/app/.streamlit:ro
+    restart: unless-stopped
