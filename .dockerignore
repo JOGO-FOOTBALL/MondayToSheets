@@ -1,0 +1,8 @@
+# Never put secrets in the image: in Azure they come from the container's environment.
+.env
+.streamlit/
+*.json
+.git
+.github
+__pycache__/
+*.md
