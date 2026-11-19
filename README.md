@@ -24,26 +24,30 @@ and adds Instagram metrics (views, reach, likes, ...) from the data science data
 To change the columns, edit `MONDAY_COLUMNS` (monday column titles) and `DB_COLUMNS` (database metrics) in
 `src/config.py`. Interactions = likes + comments + saves + shares; engagement rate = interactions / reach.
 
-## Deploy (Azure)
+## Deploy (Airflow)
 
 1. **Image:** a push to `main` builds the image and pushes it to ACR as `monday-to-sheets` (`:latest` and
    `:<date>-<sha>`), see `.github/workflows/build-push-image.yml`. Needs the repository secrets `ACR_SERVER`,
    `ACR_USERNAME` and `ACR_PASSWORD`.
-2. **Run it every 10 minutes**, one of:
-   - **Container Apps Job (preferred):** trigger *Schedule*, cron `*/10 * * * *`, env `RUN_ONCE=true`.
-     Each run takes about 30 seconds.
-   - **Container App** with min replicas = 1 and no `RUN_ONCE`: the container loops and syncs every 10 minutes.
-3. **Environment variables:**
+2. **Run it every 10 minutes** with the Airflow DAG `dag_monday_to_sheets` (airflow repo): a
+   `KubernetesPodOperator` with image `datascienceby433acr.azurecr.io/monday-to-sheets:latest`, command
+   `python -m src.main` and schedule `*/10 * * * *`. Each run takes about 30 seconds.
+3. **Environment variables** (set by the DAG; no secrets in the DAG itself):
 
-   | Name | Secret | Value |
-   |---|---|---|
-   | `MONDAY_API_TOKEN` | yes | monday personal API token (same as the Music_tool) |
-   | `GOOGLE_SERVICE_ACCOUNT_JSON` | yes | full JSON key of `monday-to-sheets@instagram-491416.iam.gserviceaccount.com` |
-   | `RUN_ONCE` | no | `true` for the Job |
+   | Name | Value |
+   |---|---|
+   | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | the Airflow service principal, used to read Key Vault |
+   | `AZURE_VAULT_URL` | `https://ds433kv.vault.azure.net/` |
+   | `RUN_ONCE` | `true`: sync once and exit, so the Airflow task finishes |
 
-4. **Key Vault access:** give the container's managed identity the role **Key Vault Secrets User** on `ds433kv`
-   (same as Player_relationship). It reads `DatasciencePsqlServer{Url,Port,Database,Username,Password}Prod`.
-   Without a managed identity, set `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` instead.
+4. **Key Vault secrets** in `ds433kv` (the service principal needs **Key Vault Secrets User** on it):
+
+   | Secret | Value |
+   |---|---|
+   | `MondayApiToken` | monday personal API token (same as the Music_tool) |
+   | `MondayToSheetsGoogleServiceAccount` | full JSON key of `monday-to-sheets@instagram-491416.iam.gserviceaccount.com`, pasted as is |
+   | `DatasciencePsqlServer{Url,Port,Database,Username,Password}Prod` | data science database login (same as Player_relationship) |
+
 5. **Network:** outgoing HTTPS to `api.monday.com`, the Google APIs and `ds433kv.vault.azure.net`, and port 5432
    to the dsdb Postgres server (`*.postgres.database.azure.com`). No incoming traffic, no storage.
 
@@ -54,10 +58,12 @@ If the database can't be reached, the monday data is still written and only the 
 ## Run locally
 
 ```bash
+cp .env.example .env               # then fill in the AZURE_* values
 pip install -r requirements.txt
-RUN_ONCE=true python -m src.main   # once (PowerShell: $env:RUN_ONCE="true"; python -m src.main)
-python -m src.main                 # every 10 minutes
+python -m src.main                 # RUN_ONCE=true in .env: once; false: every 10 minutes
 ```
 
-Local secrets: `MONDAY_API_TOKEN` and the Google key (as a `[gcp_service_account]` table) in
-`.streamlit/secrets.toml`, and the `AZURE_*` values in `.env`. Both files are in `.gitignore` and `.dockerignore`.
+With only the `AZURE_*` values in `.env`, all secrets are read from Key Vault, exactly as in Airflow.
+To skip Key Vault, set `MONDAY_API_TOKEN` / `GOOGLE_SERVICE_ACCOUNT_JSON` in `.env`, or put them in
+`.streamlit/secrets.toml` (the Google key as a `[gcp_service_account]` table). The environment wins over
+`secrets.toml`, which wins over Key Vault. `.env` and `.streamlit/` are in `.gitignore` and `.dockerignore`.

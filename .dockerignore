@@ -1,4 +1,4 @@
-# Never put secrets in the image: in Azure they come from the container's environment.
+# Never put secrets in the image: in Airflow they are read from Azure Key Vault at runtime.
 .env
 .streamlit/
 *.json
