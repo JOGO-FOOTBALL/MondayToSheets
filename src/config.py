@@ -1,12 +1,14 @@
 """All settings in one place.
 
 Each setting is read from an environment variable first, then from .streamlit/secrets.toml (local only),
-then the default below. Secrets have no default.
+then the default below. Secrets have no default: they come from the environment, then the local files
+(.env / secrets.toml), then Azure Key Vault.
 """
 
 import json
 import os
 import tomllib
+from functools import cache
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -135,25 +137,41 @@ DSDB_SECRETS = {
     "user": "DatasciencePsqlServerUsernameProd",
     "password": "DatasciencePsqlServerPasswordProd",
 }
+MONDAY_TOKEN_SECRET = "MondayApiToken"
+GOOGLE_SA_SECRET = "MondayToSheetsGoogleServiceAccount"
 
 
 # --- Secrets: read when first used ---
-def monday_api_token():
-    return get_setting("MONDAY_API_TOKEN")
-
-
-def google_service_account():
-    """The service account key: GOOGLE_SERVICE_ACCOUNT_JSON (full JSON), or [gcp_service_account] in secrets.toml."""
-    if "gcp_service_account" in _file_settings and "GOOGLE_SERVICE_ACCOUNT_JSON" not in os.environ:
-        return dict(_file_settings["gcp_service_account"])
-    return json.loads(get_setting("GOOGLE_SERVICE_ACCOUNT_JSON"))
-
-
-def dsdb_login():
-    """Database login from Key Vault. In Azure via the managed identity; locally via AZURE_TENANT_ID,
-    AZURE_CLIENT_ID and AZURE_CLIENT_SECRET (environment or .env)."""
+@cache
+def _vault_client():
     from azure.identity import DefaultAzureCredential
     from azure.keyvault.secrets import SecretClient
 
-    client = SecretClient(AZURE_VAULT_URL, DefaultAzureCredential())
-    return {key: client.get_secret(name).value.strip() for key, name in DSDB_SECRETS.items()}
+    return SecretClient(AZURE_VAULT_URL, DefaultAzureCredential())
+
+
+def _vault_secret(name):
+    """One secret from Key Vault, as the service principal in AZURE_TENANT_ID, AZURE_CLIENT_ID and
+    AZURE_CLIENT_SECRET (passed in by the Airflow DAG; locally from .env)."""
+    return _vault_client().get_secret(name).value.strip()
+
+
+def monday_api_token():
+    """MONDAY_API_TOKEN from the environment, then secrets.toml, then Key Vault."""
+    token = os.environ.get("MONDAY_API_TOKEN") or _file_settings.get("MONDAY_API_TOKEN")
+    return token or _vault_secret(MONDAY_TOKEN_SECRET)
+
+
+def google_service_account():
+    """The service account key: GOOGLE_SERVICE_ACCOUNT_JSON (full JSON), then [gcp_service_account] in
+    secrets.toml, then the full JSON from Key Vault."""
+    if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
+        return json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    if "gcp_service_account" in _file_settings:
+        return dict(_file_settings["gcp_service_account"])
+    return json.loads(_vault_secret(GOOGLE_SA_SECRET))
+
+
+def dsdb_login():
+    """Database login from Key Vault."""
+    return {key: _vault_secret(name) for key, name in DSDB_SECRETS.items()}
