@@ -1,7 +1,8 @@
-"""Copy a monday.com board into a Google Sheet tab, with Instagram metrics from our database.
+"""Copy monday.com boards into Google Sheet tabs, optionally with Instagram metrics from our database.
 
-Each sync reads the whole board and rewrites the tab, so new items appear, changes come through
-and deleted items disappear. In loop mode the sheet is only written when something changed.
+Each sync reads the board and rewrites its tab, so new items appear, changes come through and deleted
+items disappear. In loop mode a tab is only written when something changed. The boards are listed in
+config.SYNCS.
 """
 
 import hashlib
@@ -19,29 +20,24 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 log = logging.getLogger("monday-to-sheets")
 
 
-def build_table(board):
-    """Header and rows: the MONDAY_COLUMNS from the board, then the DB_COLUMNS from our database."""
-    column_ids = {}
-    for title in config.MONDAY_COLUMNS:
-        match = next((c["id"] for c in board["columns"] if c["title"] == title), None)
-        if match is None:
-            log.warning("Column '%s' is not on the board (renamed?), it stays empty", title)
-        column_ids[title] = match
+def build_table(sync, board):
+    """Header and rows: the sync's monday columns, then the Instagram metrics if it has a post_link_column."""
+    column_ids = board["column_ids"]
+    header = list(sync["columns"])
+    rows = [[cell_value(item, cid) if cid else "" for cid in column_ids] for item in board["items"]]
 
-    rows = []
-    for item in board["items"]:
-        rows.append([
-            item["name"] if column_id == "name" else cell_value(item, column_id) if column_id else ""
-            for column_id in column_ids.values()
-        ])
+    if sync.get("post_link_column"):
+        add_instagram_metrics(rows, sync["columns"].index(sync["post_link_column"]))
+        header += list(config.INSTAGRAM_METRICS)
 
-    add_db_columns(rows)
-    return config.MONDAY_COLUMNS + list(config.DB_COLUMNS), rows
+    # Never write a table whose values are shifted against the header.
+    if any(len(row) != len(header) for row in rows):
+        raise RuntimeError(f"{sync['name']}: rows do not match the {len(header)} columns, not writing")
+    return header, rows
 
 
-def add_db_columns(rows):
-    """Append the DB_COLUMNS to each row, looked up by the post link. Empty when the database fails."""
-    link_index = config.MONDAY_COLUMNS.index(config.POST_LINK_COLUMN)
+def add_instagram_metrics(rows, link_index):
+    """Append the INSTAGRAM_METRICS to each row, looked up by the post link. Empty when the database fails."""
     try:
         metrics = fetch_post_metrics([row[link_index] for row in rows if row[link_index]])
     except Exception:
@@ -50,34 +46,60 @@ def add_db_columns(rows):
 
     for row in rows:
         post = metrics.get(shortcode(row[link_index]), {})
-        row += ["" if post.get(field) is None else post[field] for field in config.DB_COLUMNS.values()]
+        row += ["" if post.get(field) is None else post[field] for field in config.INSTAGRAM_METRICS.values()]
 
 
-def sync(previous_hash=None):
-    board = fetch_board(config.MONDAY_BOARD_ID)
-    header, rows = build_table(board)
+def sync_one(sync, previous_hash=None):
+    board = fetch_board(sync["board_id"], sync["columns"])
+    header, rows = build_table(sync, board)
 
     table_hash = hashlib.sha256(json.dumps([header, rows], default=str).encode()).hexdigest()
     if table_hash == previous_hash:
-        log.info("No changes")
+        log.info("%s: no changes", sync["name"])
         return table_hash
 
-    write_tab(header, rows)
-    log.info("Synced %d items from '%s' to tab '%s'", len(rows), board["name"], config.SHEET_TAB)
+    write_tab(sync["spreadsheet_id"], sync["tab"], header, rows)
+    log.info("%s: synced %d items from '%s' to tab '%s'", sync["name"], len(rows), board["name"], sync["tab"])
     return table_hash
 
 
-def main():
-    if config.RUN_ONCE:
-        sync()
-        return
+def is_due(sync, last_run, now):
+    """Whether a sync should run now, given its every_minutes.
 
-    table_hash = None
-    while True:
+    In loop mode the program remembers when each sync last ran. A scheduled job (RUN_ONCE) remembers
+    nothing between runs, so there a sync runs in the first job of each slot on the clock: with
+    every_minutes=180 and a job every 10 minutes, that is the job between 00:00 and 00:10 UTC, 03:00, etc.
+    """
+    every = sync.get("every_minutes", config.SYNC_INTERVAL_SECONDS // 60) * 60
+    if config.FORCE or every <= config.SYNC_INTERVAL_SECONDS:
+        return True
+    if config.RUN_ONCE:
+        return now % every < config.SYNC_INTERVAL_SECONDS
+    return last_run is None or now - last_run >= every - 60
+
+
+def sync_all(state):
+    """Run every sync that is due; one failing board does not stop the others."""
+    now = time.time()
+    for sync in config.SYNCS:
+        name = sync["name"]
+        if config.ONLY and name not in config.ONLY:
+            continue
+        if not is_due(sync, state.get(name, {}).get("last_run"), now):
+            continue
         try:
-            table_hash = sync(table_hash)
+            table_hash = sync_one(sync, state.get(name, {}).get("hash"))
+            state[name] = {"hash": table_hash, "last_run": now}
         except Exception:
-            log.exception("Sync failed, trying again next round")
+            log.exception("%s: sync failed", name)
+
+
+def main():
+    state = {}
+    while True:
+        sync_all(state)
+        if config.RUN_ONCE:
+            return
         time.sleep(config.SYNC_INTERVAL_SECONDS)
 
 
