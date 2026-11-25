@@ -1,28 +1,35 @@
 # MondayToSheets
 
-Copies the monday board [P8893 | CC | 433 Awards 2026](https://433-force.monday.com/boards/18437648212) every
-10 minutes into the tab **Monday** of the Google Sheet
-[433 Awards 2026 - Approach](https://docs.google.com/spreadsheets/d/1tjCpL-27djrMfVj4DTzosXvCWIn9e5VkfqonVEHE_-c/edit),
-and adds Instagram metrics (views, reach, likes, ...) from the data science database for each item with a
-**Post Link (My Del.)**.
+Copies monday boards into Google Sheet tabs, so people without monday can see them. Configured in
+`SYNCS` in `src/config.py`:
 
-- Each sync reads the whole board and rewrites the tab: new items appear, changes come through, deleted items
+| Board | Sheet → tab | How often |
+|---|---|---|
+| [P8893 \| CC \| 433 Awards 2026](https://433-force.monday.com/boards/18437648212) | [433 Awards 2026 - Approach](https://docs.google.com/spreadsheets/d/1tjCpL-27djrMfVj4DTzosXvCWIn9e5VkfqonVEHE_-c/edit) → **Monday** | every 10 minutes |
+| [Deal Tracker](https://433-force.monday.com/boards/4676673163) | [Outreach](https://docs.google.com/spreadsheets/d/1EOlohxDUypR1hBATPy3KgTdU5NaGWTVDafMAAImiB1k/edit) → **Deal Tracker** | every 3 hours |
+
+For the Awards board, Instagram metrics (views, reach, likes, ...) from the data science database are added for
+each item with a **Post Link (My Del.)**.
+
+- Each sync reads the board and rewrites its tab: new items appear, changes come through, deleted items
   disappear. Only the values are replaced; formatting stays.
-- Only the tab **Monday** is written. Other tabs are never read or changed.
-- Read-only on monday and the database.
+- Only the configured tabs are written. Other tabs are never read or changed.
+- Read-only on monday and the database. One board failing does not stop the others.
 
 ## Code
 
 | File | What it does |
 |---|---|
-| `src/main.py` | The sync: board → table → sheet. Runs once (`RUN_ONCE=true`) or in a loop. |
-| `src/config.py` | **All settings**: board, sheet, which columns in which order, Key Vault secret names. |
-| `src/monday_client.py` | Reads all items of the board (monday GraphQL API). |
+| `src/main.py` | The sync: board → table → sheet, for each board that is due. Runs once (`RUN_ONCE=true`) or in a loop. |
+| `src/config.py` | **All settings**: the boards (`SYNCS`) with their sheet, tab, columns and frequency; Key Vault secret names. |
+| `src/monday_client.py` | Reads the items of a board, only for the configured columns (monday GraphQL API). |
 | `src/socials_db.py` | Looks up Instagram posts by link in `socials_analytics.instagram_posts` / `instagram_collab_posts`. |
 | `src/sheets_writer.py` | Writes the table into the tab. |
 
-To change the columns, edit `MONDAY_COLUMNS` (monday column titles) and `DB_COLUMNS` (database metrics) in
-`src/config.py`. Interactions = likes + comments + saves + shares; engagement rate = interactions / reach.
+To add a board or change columns, edit `SYNCS` in `src/config.py` (and share a new sheet with the service account
+`monday-to-sheets@instagram-491416.iam.gserviceaccount.com` as Editor). `every_minutes` sets how often a board
+syncs (default every 10 minutes; 180 = at 00:00, 03:00, ... UTC). The Instagram metrics are in `INSTAGRAM_METRICS`:
+interactions = likes + comments + saves + shares; engagement rate = interactions / reach.
 
 ## Deploy (Airflow)
 
@@ -51,7 +58,8 @@ To change the columns, edit `MONDAY_COLUMNS` (monday column titles) and `DB_COLU
 5. **Network:** outgoing HTTPS to `api.monday.com`, the Google APIs and `ds433kv.vault.azure.net`, and port 5432
    to the dsdb Postgres server (`*.postgres.database.azure.com`). No incoming traffic, no storage.
 
-**Check:** the log shows `Synced 178 items from 'P8893 | CC | 433 Awards 2026' to tab 'Monday'`.
+**Check:** the log shows lines like `433 Awards 2026: synced 190 items from 'P8893 | CC | 433 Awards 2026' to tab 'Monday'`,
+and every 3 hours one for `Deal Tracker` (about 3,300 items, takes about a minute).
 If the database can't be reached, the monday data is still written and only the metric columns stay empty
 (the log shows `Could not read the database`).
 
@@ -60,7 +68,9 @@ If the database can't be reached, the monday data is still written and only the 
 ```bash
 cp .env.example .env               # then fill in the AZURE_* values
 pip install -r requirements.txt
-python -m src.main                 # RUN_ONCE=true in .env: once; false: every 10 minutes
+RUN_ONCE=true FORCE=true python -m src.main   # all boards once, now
+RUN_ONCE=true FORCE=true ONLY="433 Awards 2026" python -m src.main   # one board (name from SYNCS)
+python -m src.main                            # keeps running, each board on its own schedule
 ```
 
 With only the `AZURE_*` values in `.env`, all secrets are read from Key Vault, exactly as in Airflow.

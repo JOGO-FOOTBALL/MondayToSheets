@@ -26,49 +26,16 @@ def get_setting(key, default=None):
     return value
 
 
-# --- monday board to copy ---
-MONDAY_BOARD_ID = get_setting("MONDAY_BOARD_ID", "18437648212")  # P8893 | CC | 433 Awards 2026
-
-# --- Google Sheet: only this tab is ever written; other tabs are never touched ---
-SPREADSHEET_ID = get_setting("SPREADSHEET_ID", "1tjCpL-27djrMfVj4DTzosXvCWIn9e5VkfqonVEHE_-c")  # 433 Awards 2026 - Approach
-SHEET_TAB = get_setting("SHEET_TAB", "Monday")
-
-# --- Schedule: RUN_ONCE=true syncs once and exits (for a scheduled job); otherwise it loops ---
+# --- Schedule ---
+# The program wakes up every SYNC_INTERVAL_SECONDS (or, with RUN_ONCE=true, is started that often by a scheduled
+# job) and runs each sync whose own "every_minutes" has come round. FORCE=true runs all syncs right away.
 SYNC_INTERVAL_SECONDS = int(get_setting("SYNC_INTERVAL_SECONDS", 600))
 RUN_ONCE = str(get_setting("RUN_ONCE", "false")).lower() == "true"
+FORCE = str(get_setting("FORCE", "false")).lower() == "true"
+ONLY = [n.strip() for n in str(get_setting("ONLY", "")).split(",") if n.strip()]  # e.g. ONLY="433 Awards 2026"
 
-# --- Columns from monday, by their title on the board, in this order ---
-# A title that exists twice on the board (e.g. "Publish date") uses the first one.
-MONDAY_COLUMNS = [
-    "Name",
-    "PM status",
-    "Publish date",
-    "Account",
-    "Post Link (My Del.)",
-    "Post Link Story (My Del.)",
-    "Tag post #",
-    "Collab post #",
-    "Collab post",
-    "Caption",
-    "Paid partner",
-    "GD Need",
-    "Final files [GD]",
-    "Brief [GD]",
-    "Brief files [GD]",
-    "Asset link",
-    "Publish note",
-    "Latest Item name",
-    "SM",
-    "PM",
-    "GD",
-    "Project name",
-]
-
-# --- Columns from our database, added after the monday columns, in this order ---
-# The post is looked up by the Instagram link in POST_LINK_COLUMN.
-# Sheet column -> field in socials_db.fetch_post_metrics.
-POST_LINK_COLUMN = "Post Link (My Del.)"
-DB_COLUMNS = {
+# --- Instagram metrics from our database, by sheet column -> field in socials_db.fetch_post_metrics ---
+INSTAGRAM_METRICS = {
     "Views": "views",
     "Reach": "reach",
     "Interactions": "interactions",  # likes + comments + saved + shares
@@ -81,6 +48,85 @@ DB_COLUMNS = {
     "Thumbnail": "thumbnail_url_abs",
 }
 PERCENT_COLUMNS = ["Engagement rate"]
+
+# --- What to sync: one block per monday board ---
+# board_id:        the number in the monday board URL
+# spreadsheet_id:  the ID in the Google Sheet URL (share the sheet with the service account as Editor)
+# tab:             the only tab that is written; other tabs are never touched
+# columns:         monday column titles, in this order. A title that exists twice on the board uses the first one.
+# every_minutes (optional): how often, default every SYNC_INTERVAL_SECONDS. A multiple of 10, e.g. 180 = every 3 hours
+#                  (at 00:00, 03:00, 06:00, ... UTC).
+# post_link_column (optional): add INSTAGRAM_METRICS after the columns, looked up by the link in this column
+SYNCS = [
+    {
+        "name": "433 Awards 2026",
+        "board_id": "18437648212",
+        "spreadsheet_id": "1tjCpL-27djrMfVj4DTzosXvCWIn9e5VkfqonVEHE_-c",  # 433 Awards 2026 - Approach
+        "tab": "Monday",
+        "columns": [
+            "Name",
+            "PM status",
+            "Publish date",
+            "Account",
+            "Post Link (My Del.)",
+            "Post Link Story (My Del.)",
+            "Tag post #",
+            "Collab post #",
+            "Collab post",
+            "Caption",
+            "Paid partner",
+            "GD Need",
+            "Final files [GD]",
+            "Brief [GD]",
+            "Brief files [GD]",
+            "Asset link",
+            "Publish note",
+            "Latest Item name",
+            "SM",
+            "PM",
+            "GD",
+            "Project name",
+        ],
+        "post_link_column": "Post Link (My Del.)",
+    },
+    {
+        "name": "Deal Tracker",
+        "board_id": "4676673163",
+        "spreadsheet_id": "1EOlohxDUypR1hBATPy3KgTdU5NaGWTVDafMAAImiB1k",  # Outreach
+        "tab": "Deal Tracker",
+        "every_minutes": 180,
+        "columns": [
+            "Name",
+            "Project name",
+            "Project no.",
+            "LC date",
+            "*SM & targets *Import*",
+            "SM",
+            "My Companies",
+            "My contacts",
+            "Agency",
+            "Industry",
+            "Category",
+            "Stage",
+            "Lead stage",
+            "Likelyhood",
+            "Deal length*",
+            "Deal creation date*",
+            "Close Date*",
+            "Last Updated",
+            "Item ID",
+            "Type of deal",
+            "Group",
+            "Creation date*",
+            "Deal closing month",
+            "Deal closing Quarter",
+            "Team",
+            "Event",
+            "Type",
+            "Account"
+        ],
+    },
+]
 
 # --- Azure Key Vault with the data science database login (same as Player_relationship) ---
 AZURE_VAULT_URL = get_setting("AZURE_VAULT_URL", "https://ds433kv.vault.azure.net/")

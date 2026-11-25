@@ -7,12 +7,12 @@ import gspread
 from src import config
 
 
-def write_tab(header, rows):
-    sheet = gspread.service_account_from_dict(config.google_service_account()).open_by_key(config.SPREADSHEET_ID)
+def write_tab(spreadsheet_id, tab_name, header, rows):
+    sheet = gspread.service_account_from_dict(config.google_service_account()).open_by_key(spreadsheet_id)
     try:
-        tab = sheet.worksheet(config.SHEET_TAB)
+        tab = sheet.worksheet(tab_name)
     except gspread.WorksheetNotFound:
-        tab = sheet.add_worksheet(title=config.SHEET_TAB, rows=len(rows) + 1, cols=len(header))
+        tab = sheet.add_worksheet(title=tab_name, rows=len(rows) + 1, cols=len(header))
 
     data = [header] + rows
 
@@ -30,13 +30,15 @@ def write_tab(header, rows):
 
 
 def _format_db_columns(sheet, tab, header):
-    """Percent format for PERCENT_COLUMNS, plain format for the other database columns.
+    """Percent format for PERCENT_COLUMNS, plain format for the other Instagram metric columns.
 
     Resetting matters when the column order changes: otherwise a column that moves into the old
     Engagement rate position keeps the % format (345 would show as 34500%).
     """
     requests = []
-    for title in config.DB_COLUMNS:
+    for title in config.INSTAGRAM_METRICS:
+        if title not in header:
+            continue
         col = header.index(title)
         number_format = {"numberFormat": {"type": "PERCENT", "pattern": "0.00%"}} if title in config.PERCENT_COLUMNS else {}
         requests.append({
@@ -46,4 +48,5 @@ def _format_db_columns(sheet, tab, header):
                 "fields": "userEnteredFormat.numberFormat",
             }
         })
-    sheet.batch_update({"requests": requests})
+    if requests:
+        sheet.batch_update({"requests": requests})
